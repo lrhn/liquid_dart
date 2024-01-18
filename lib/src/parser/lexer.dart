@@ -20,25 +20,60 @@ class _TokenCreator {
 }
 
 class Lexer {
-  final List<_TokenCreator> tokenCreators = [
-    _TokenCreator.re(TokenType.comparison, r'[=!]=|<[=>]?|>=?'),
-    _TokenCreator.re(TokenType.single_string, r"'.*?'"),
-    _TokenCreator.re(TokenType.double_string, r'".*?"'),
-    _TokenCreator.re(TokenType.number, r'-?\d+(?:\.\d+)?'),
-    _TokenCreator.re(TokenType.identifier, r'[a-zA-Z_][\w-]*\??'),
-    _TokenCreator(TokenType.dotdot, '..'),
-    _TokenCreator(TokenType.pipe, '|'),
-    _TokenCreator(TokenType.dot, '.'),
-    _TokenCreator(TokenType.assign, '='),
-    _TokenCreator(TokenType.colon, ':'),
-    _TokenCreator(TokenType.comma, ','),
-    _TokenCreator(TokenType.open_square, '['),
-    _TokenCreator(TokenType.close_square, ']'),
-    _TokenCreator(TokenType.open_banana, '('),
-    _TokenCreator(TokenType.close_banana, ')'),
-    _TokenCreator(TokenType.question, '?'),
-    _TokenCreator(TokenType.dash, '-'),
-  ];
+  static const _tableSize = 128;
+  // Table of table of token-creators that can start at a given ASCII character,
+  // for the first 128 ASCII characters.
+  static final List<List<_TokenCreator>?> _tokenCreatorTable = _createTokenCreatorTable();
+
+  static List<_TokenCreator> _tokenCreatorsForNextChar(int nextChar) {
+    if (nextChar >= 0 && nextChar < _tableSize) {
+      var tokenCreators = _tokenCreatorTable[nextChar];
+      if (tokenCreators != null) return tokenCreators;
+    }
+    return const <_TokenCreator>[];
+  }
+
+  static List<List<_TokenCreator>?> _createTokenCreatorTable() {
+    var table = List<List<_TokenCreator>?>.filled(_tableSize, null);
+    // Adds token creator for the start-characters in `firstChars`,
+    // which can contain single characters or `A-Z` ranges, like a RegExp
+    // character class (put an actual `-` at either end).
+    void addTokenCreator(String firstChars, _TokenCreator tokenCreator) {
+      const dashChar = 0x2D;
+      for (var i = 0; i < firstChars.length; i++) {
+        var code = firstChars.codeUnitAt(i);
+        var endCode = code;
+        if (i + 2 < firstChars.length && firstChars.codeUnitAt(i + 1) == dashChar) {
+          endCode = firstChars.codeUnitAt(i + 2);
+          i += 2;
+        }
+        while (code <= endCode) {
+          (table[code] ??= []).add(tokenCreator);
+          code++;
+        }
+      }
+    }
+
+    addTokenCreator('!=<>', _TokenCreator.re(TokenType.comparison, r'[=!]=|<[=>]?|>=?'));
+    addTokenCreator("'", _TokenCreator.re(TokenType.single_string, r"'.*?'"));
+    addTokenCreator('"', _TokenCreator.re(TokenType.double_string, r'".*?"'));
+    addTokenCreator('-0-9', _TokenCreator.re(TokenType.number, r'-?\d+(?:\.\d+)?'));
+    addTokenCreator('a-zA-Z_', _TokenCreator.re(TokenType.identifier, r'[a-zA-Z_][\w-]*\??'));
+    addTokenCreator('.', _TokenCreator(TokenType.dotdot, '..'));
+    addTokenCreator('|', _TokenCreator(TokenType.pipe, '|'));
+    addTokenCreator('.', _TokenCreator(TokenType.dot, '.'));
+    addTokenCreator('=', _TokenCreator(TokenType.assign, '='));
+    addTokenCreator(':', _TokenCreator(TokenType.colon, ':'));
+    addTokenCreator(',', _TokenCreator(TokenType.comma, ','));
+    addTokenCreator('[', _TokenCreator(TokenType.open_square, '['));
+    addTokenCreator(']', _TokenCreator(TokenType.close_square, ']'));
+    addTokenCreator('(', _TokenCreator(TokenType.open_banana, '('));
+    addTokenCreator(')', _TokenCreator(TokenType.close_banana, ')'));
+    addTokenCreator('?', _TokenCreator(TokenType.question, '?'));
+    addTokenCreator('-', _TokenCreator(TokenType.dash, '-'));
+
+    return table;
+  }
 
   final markup = _TokenCreator.re(TokenType.markup, r'(?:[^\s{]|\{(?![{%])|\s+?(?!\s|\{[{%]-))+');
   final whitespace = RegExp(r'\s*');
@@ -90,11 +125,14 @@ class Lexer {
       ss.scan(whitespace);
       if (ss.scan(end)) break;
 
-      for (final creator in tokenCreators) {
-        final token = creator.scan(source, ss);
-        if (token != null) {
-          yield token;
-          continue mainLoop;
+      var nextChar = ss.peekChar();
+      if (nextChar != null) {
+        for (final creator in _tokenCreatorsForNextChar(nextChar)) {
+          final token = creator.scan(source, ss);
+          if (token != null) {
+            yield token;
+            continue mainLoop;
+          }
         }
       }
 
